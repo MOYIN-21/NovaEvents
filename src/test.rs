@@ -1337,6 +1337,54 @@ fn test_resell_ticket_zero_or_negative_price_rejected_when_rules_set() {
 }
 
 #[test]
+fn test_resell_ticket_rejected_on_ended_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, token_admin, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    token_admin.mint(&buyer, &50_000_000_i128);
+
+    let event_id = create_test_event(&env, &client, &organizer);
+    let ticket_id = client.buy_ticket(&buyer, &event_id, &0);
+    client.end_event(&organizer, &event_id);
+
+    let result =
+        client.try_resell_ticket(&buyer, &event_id, &ticket_id, &recipient, &20_000_000_i128);
+    assert_eq!(result, Err(Ok(Error::EventNotActive)));
+
+    // Ownership must be unchanged.
+    assert_eq!(client.get_ticket(&event_id, &ticket_id).owner, buyer);
+}
+
+#[test]
+fn test_resell_ticket_rejected_on_cancelled_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_, token_admin, _, client) = setup(&env);
+    let organizer = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    token_admin.mint(&buyer, &50_000_000_i128);
+
+    let event_id = create_test_event(&env, &client, &organizer);
+    let ticket_id = client.buy_ticket(&buyer, &event_id, &0);
+    client.cancel_event(&organizer, &event_id);
+
+    let result =
+        client.try_resell_ticket(&buyer, &event_id, &ticket_id, &recipient, &20_000_000_i128);
+    assert_eq!(result, Err(Ok(Error::EventNotActive)));
+
+    // Ownership must be unchanged.
+    assert_eq!(client.get_ticket(&event_id, &ticket_id).owner, buyer);
+}
+
+#[test]
 fn test_resell_ticket_full_royalty_skips_zero_seller_transfer() {
     // At royalty_bps: 10_000 (100%), seller_amount is exactly 0. The seller
     // transfer must be skipped rather than attempted with a zero amount.
