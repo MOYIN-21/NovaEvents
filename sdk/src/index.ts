@@ -537,6 +537,23 @@ export class NovaEventsClient {
   }
 
   /**
+   * Admin halts all state-changing contract functions in an emergency.
+   * Read-only queries continue to work while paused.
+   */
+  async pause(admin: string, opts: SignerOptions): Promise<void> {
+    const op = this.contract.call("pause", addressToScVal(admin));
+    await this.invoke(op, opts);
+  }
+
+  /**
+   * Admin resumes normal contract operations after an emergency pause.
+   */
+  async unpause(admin: string, opts: SignerOptions): Promise<void> {
+    const op = this.contract.call("unpause", addressToScVal(admin));
+    await this.invoke(op, opts);
+  }
+
+  /**
    * Organizer disburses `amount` USDC from the event balance to `recipient`.
    * Only callable on an Ended event.
    */
@@ -631,6 +648,13 @@ export class NovaEventsClient {
     const op = this.contract.call("get_admin");
     const result = await this.query(op);
     return Address.fromScVal(result).toString();
+  }
+
+  /** Returns whether the contract is currently paused. */
+  async is_paused(): Promise<boolean> {
+    const op = this.contract.call("is_paused");
+    const result = await this.query(op);
+    return scValToNative(result) as boolean;
   }
 
   /** Fetch every payout disbursed for an event. */
