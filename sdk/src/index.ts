@@ -88,6 +88,15 @@ export interface Payout {
 }
 
 /**
+ * A record of a single resale royalty paid directly to the organizer.
+ * Recorded each time `resell_ticket` routes a nonzero royalty.
+ */
+export interface Royalty {
+  ticket_id: number;
+  amount: bigint;
+}
+
+/**
  * Per-event resale rules for paid ticket transfers.
  * `royalty_bps` is in basis points (1 bp = 0.01%, 10_000 bp = 100%).
  */
@@ -192,6 +201,14 @@ function scValToPayout(val: xdr.ScVal): Payout {
   const native = scValToNative(val) as Record<string, unknown>;
   return {
     recipient: (native["recipient"] as Address).toString(),
+    amount: native["amount"] as bigint,
+  };
+}
+
+function scValToRoyalty(val: xdr.ScVal): Royalty {
+  const native = scValToNative(val) as Record<string, unknown>;
+  return {
+    ticket_id: native["ticket_id"] as number,
     amount: native["amount"] as bigint,
   };
 }
@@ -701,6 +718,17 @@ export class NovaEventsClient {
     const result = await this.query(op);
     const vec = result.vec() ?? [];
     return vec.map(scValToPayout);
+  }
+
+  /** Fetch every resale royalty recorded for an event. */
+  async get_royalties(event_id: number): Promise<Royalty[]> {
+    const op = this.contract.call(
+      "get_royalties",
+      nativeToScVal(event_id, { type: "u32" })
+    );
+    const result = await this.query(op);
+    const vec = result.vec() ?? [];
+    return vec.map(scValToRoyalty);
   }
 
   /**
