@@ -450,6 +450,41 @@ export class NovaEventsClient {
   }
 
   /**
+   * Organizer closes an event, transitioning it from Active to Ended.
+   * Blocks further ticket purchases and sponsorships, and is the
+   * prerequisite for `payout`.
+   */
+  async end_event(
+    organizer: string,
+    event_id: number,
+    opts: SignerOptions
+  ): Promise<void> {
+    const op = this.contract.call(
+      "end_event",
+      addressToScVal(organizer),
+      nativeToScVal(event_id, { type: "u32" })
+    );
+    await this.invoke(op, opts);
+  }
+
+  /**
+   * Organizer cancels an Active event, refunding every unredeemed ticket
+   * buyer and every sponsor before marking the event Cancelled.
+   */
+  async cancel_event(
+    organizer: string,
+    event_id: number,
+    opts: SignerOptions
+  ): Promise<void> {
+    const op = this.contract.call(
+      "cancel_event",
+      addressToScVal(organizer),
+      nativeToScVal(event_id, { type: "u32" })
+    );
+    await this.invoke(op, opts);
+  }
+
+  /**
    * Sponsor contributes USDC to an event.
    * Contribution is recorded publicly against the sponsor's address.
    */
