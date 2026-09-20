@@ -24,7 +24,6 @@ set -euo pipefail
 NETWORK="local"
 SKIP_BUILD=0
 KEEP_SANDBOX=0
-REQUIRE_END_EVENT=0
 CONTAINER_NAME="nova-events-e2e"
 
 WASM_PATH="target/wasm32v1-none/release/nova_events.wasm"
@@ -41,7 +40,6 @@ readonly ERR_EVENT_NOT_FOUND=3
 readonly ERR_UNAUTHORIZED=6
 readonly ERR_EVENT_NOT_ACTIVE=7
 readonly ERR_ALREADY_REDEEMED=8
-readonly ERR_EVENT_NOT_ENDED=24
 readonly ERR_INVALID_RECIPIENT=26
 
 # ─── Output helpers ───────────────────────────────────────────────────────────
@@ -71,7 +69,6 @@ Options:
   --network <local|testnet>  Target network. Default: local.
   --skip-build               Reuse the existing WASM instead of rebuilding.
   --keep-sandbox             Leave the local container running when done.
-  --require-end-event        Fail (instead of skipping) if end_event is absent.
   -h, --help                 Show this help.
 USAGE
 }
@@ -84,7 +81,6 @@ while [[ $# -gt 0 ]]; do
         --network=*)          NETWORK="${1#*=}"; shift ;;
         --skip-build)         SKIP_BUILD=1; shift ;;
         --keep-sandbox)       KEEP_SANDBOX=1; shift ;;
-        --require-end-event)  REQUIRE_END_EVENT=1; shift ;;
         -h|--help)            usage; exit 0 ;;
         *)                    usage >&2; die "Unknown argument: $1" ;;
     esac
@@ -418,51 +414,30 @@ assert_eq "$COLLECTED" "$((CONTRACT_BAL_NOW - CONTRACT_BAL_BEFORE))" \
 
 step "End event & payout"
 
-# end_event is tracked separately (NovaFest-Labs/NovaEvents#1). Detect it from
-# the deployed contract's own spec so this stage lights up automatically once it
-# ships, rather than needing the script to be edited.
-if stellar contract info interface --id "$CONTRACT_ID" --network "$NETWORK" 2>/dev/null \
-    | grep -qE '\bfn +end_event\b'; then
+tx "$ORGANIZER_KEY" end_event --organizer "$ORGANIZER" --event_id "$EVENT_ID" >/dev/null
+assert_json_eq '.status' "Ended" "$(call get_event --event_id "$EVENT_ID")" \
+    "event status is Ended"
 
-    tx "$ORGANIZER_KEY" end_event --organizer "$ORGANIZER" --event_id "$EVENT_ID" >/dev/null
-    assert_json_eq '.status' "Ended" "$(call get_event --event_id "$EVENT_ID")" \
-        "event status is Ended"
+assert_error "$ERR_EVENT_NOT_ACTIVE" "sales are locked once ended" "$ATTENDEE_KEY" \
+    buy_ticket --buyer "$ATTENDEE" --event_id "$EVENT_ID" --tier_index 0
+assert_error "$ERR_EVENT_NOT_ACTIVE" "sponsorship is locked once ended" "$SPONSOR_KEY" \
+    sponsor_event --sponsor "$SPONSOR" --event_id "$EVENT_ID" --amount "$SPONSOR_AMOUNT"
 
-    assert_error "$ERR_EVENT_NOT_ACTIVE" "sales are locked once ended" "$ATTENDEE_KEY" \
-        buy_ticket --buyer "$ATTENDEE" --event_id "$EVENT_ID" --tier_index 0
-    assert_error "$ERR_EVENT_NOT_ACTIVE" "sponsorship is locked once ended" "$SPONSOR_KEY" \
-        sponsor_event --sponsor "$SPONSOR" --event_id "$EVENT_ID" --amount "$SPONSOR_AMOUNT"
+WORKER_BAL_BEFORE=$(token_balance "$WORKER")
+tx "$ORGANIZER_KEY" payout --organizer "$ORGANIZER" --event_id "$EVENT_ID" \
+    --recipient "$WORKER" --amount "$PAYOUT_AMOUNT" >/dev/null
 
-    WORKER_BAL_BEFORE=$(token_balance "$WORKER")
-    tx "$ORGANIZER_KEY" payout --organizer "$ORGANIZER" --event_id "$EVENT_ID" \
-        --recipient "$WORKER" --amount "$PAYOUT_AMOUNT" >/dev/null
+PAYOUTS=$(call get_payouts --event_id "$EVENT_ID")
+assert_json_eq 'length'         "1"              "$PAYOUTS" "one payout recorded"
+assert_json_eq '.[0].recipient' "$WORKER"        "$PAYOUTS" "payout recipient is the worker"
+assert_json_eq '.[0].amount'    "$PAYOUT_AMOUNT" "$PAYOUTS" "payout amount round-trips"
 
-    PAYOUTS=$(call get_payouts --event_id "$EVENT_ID")
-    assert_json_eq 'length'         "1"              "$PAYOUTS" "one payout recorded"
-    assert_json_eq '.[0].recipient' "$WORKER"        "$PAYOUTS" "payout recipient is the worker"
-    assert_json_eq '.[0].amount'    "$PAYOUT_AMOUNT" "$PAYOUTS" "payout amount round-trips"
-
-    assert_eq "$((COLLECTED - PAYOUT_AMOUNT))" \
-        "$(call get_balance --event_id "$EVENT_ID" | tr -d '"')" \
-        "event balance is reduced by the payout"
-    WORKER_BAL_AFTER=$(token_balance "$WORKER")
-    assert_eq "$PAYOUT_AMOUNT" "$((WORKER_BAL_AFTER - WORKER_BAL_BEFORE))" \
-        "worker actually received the funds"
-else
-    if (( REQUIRE_END_EVENT == 1 )); then
-        die "end_event is not in the deployed contract's interface, but --require-end-event was set."
-    fi
-    warn "end_event is not implemented yet (NovaFest-Labs/NovaEvents#1)."
-    warn "Verifying the payout gate instead; rerun once end_event lands."
-    # Without end_event the event can never leave Active, so payout is
-    # unreachable. Assert the gate holds rather than silently skipping.
-    assert_error "$ERR_EVENT_NOT_ENDED" "payout is gated on an Ended event" "$ORGANIZER_KEY" \
-        payout --organizer "$ORGANIZER" --event_id "$EVENT_ID" \
-        --recipient "$WORKER" --amount "$PAYOUT_AMOUNT"
-    assert_json_eq 'length' "0" "$(call get_payouts --event_id "$EVENT_ID")" \
-        "no payouts recorded"
-    skip "end_event -> payout disbursement (blocked on #1)"
-fi
+assert_eq "$((COLLECTED - PAYOUT_AMOUNT))" \
+    "$(call get_balance --event_id "$EVENT_ID" | tr -d '"')" \
+    "event balance is reduced by the payout"
+WORKER_BAL_AFTER=$(token_balance "$WORKER")
+assert_eq "$PAYOUT_AMOUNT" "$((WORKER_BAL_AFTER - WORKER_BAL_BEFORE))" \
+    "worker actually received the funds"
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 
